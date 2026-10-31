@@ -1,0 +1,37 @@
+Job Title: Python Developer – E-commerce (FastAPI & Shopify)
+Experience: 1–3 years
+Employment Type: Full-time
+
+Job Summary:
+We are seeking a Python Developer with 1–3 years of backend development experience, FastAPI skills, and practical Shopify API integration experience. The developer will build scalable backend services, integrate Shopify stores with external systems, automate e-commerce workflows, and develop reliable REST APIs.
+
+Key Responsibilities:
+- Develop and maintain backend applications using Python and FastAPI.
+- Integrate Shopify stores with third-party applications, payment services, inventory systems, and shipping platforms.
+- Work with Shopify Admin APIs, especially GraphQL Admin API; understand existing REST integrations.
+- Build APIs for product synchronization, order processing, customer management, and inventory updates.
+- Implement Shopify webhooks for order and inventory events.
+- Automate order fulfillment, product updates, pricing, and inventory synchronization.
+- Use PostgreSQL/MySQL and an ORM such as SQLAlchemy.
+- Implement secure authentication, access controls, and credential handling.
+- Use async/await and background jobs where appropriate.
+- Troubleshoot issues, write tests, document code, and collaborate with a development team.
+
+Required Skills:
+- 1–3 years of hands-on Python backend development.
+- Strong Python and object-oriented programming.
+- Practical FastAPI API development.
+- REST APIs, HTTP, JSON, and tools such as Postman.
+- Shopify API integration experience; knowledge of authentication, scopes, rate limits, and webhooks.
+- PostgreSQL/MySQL, SQL, and SQLAlchemy or another ORM.
+- Asynchronous programming with async/await.
+- Git/GitHub and testing with Pytest or similar.
+
+Preferred Skills:
+- Shopify Admin GraphQL API and Shopify app development.
+- OAuth/app installation workflows.
+- Celery, Redis, Docker, CI/CD, and cloud platforms.
+- E-commerce workflows: orders, fulfillment, refunds, inventory, ERP/CRM/shipping integrations.
+
+Screening principles:
+Assess only job-related skills, experience, and evidence in the CV. Do not infer or score candidates based on age, gender, ethnicity, religion, disability, photo, marital status, or other protected/personal characteristics. AI scores are decision support; a human recruiter must review every shortlist before invitations are sent.

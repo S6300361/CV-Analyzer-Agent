@@ -1,0 +1,27 @@
+﻿# Python environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# API credentials
+api.env
+*.env
+.env
+!.env.example
+service-account*.json
+
+# Private candidate information
+CV_Folder_16_Sample_CVs/
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated files
+output.xlsx
+*.log
+
+# Editor files
+.vscode/
+.DS_Store
+Thumbs.db

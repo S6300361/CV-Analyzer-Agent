@@ -1,0 +1,10 @@
+openai>=1.40.0
+python-dotenv>=1.0.1
+pandas>=2.2.0
+openpyxl>=3.1.2
+pypdf>=4.2.0
+python-docx>=1.1.2
+python-dateutil>=2.9.0
+# Required only for actual Google Calendar scheduling:
+google-api-python-client>=2.130.0
+google-auth>=2.30.0
