@@ -6,12 +6,12 @@ candidate insights in a Streamlit dashboard.
 
 ## Overview
 
-The project supports an initial recruitment-screening workflow: 1. Reads
-CV files from the configured input folder. 2. Evaluates candidate
-information against the job requirements configured in the analyzer. 3.
-Uses the Google Gemini API to assist with resume analysis. 4. Stores
-screening records in a local SQLite database. 5. Displays candidate
-metrics and screening information in a Streamlit dashboard.
+The project supports an initial recruitment-screening workflow: 
+1. Reads CV files from the configured input folder. 
+2. Evaluates candidate information against the job requirements configured in the analyzer. 
+3.Uses the Google Gemini API to assist with resume analysis. 
+4. Stores screening records in a local SQLite database. 
+5. Displays candidate metrics and screening information in a Streamlit dashboard.
 
 **Important:** AI-generated scores and recommendations are
 decision-support information only. A human recruiter must review
