@@ -13,7 +13,7 @@ service-account*.json
 
 # Private candidate information
 CV_Folder_16_Sample_CVs/
-*
+
 
 # Generated files
 output.xlsx
