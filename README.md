@@ -191,15 +191,8 @@ the specific error.
 CVs. - Confirm that the dashboard is connected to the expected SQLite
 database.
 
-## Possible Future Improvements
-
--   Configurable screening criteria for different job roles.
--   More robust CV extraction and validation.
--   Recruiter notes and candidate status updates.
--   Automated tests for analysis and database operations.
--   Authentication and access controls before multi-user deployment.
-
 ## Author
 
 Developed as a learning project exploring Python, AI-assisted resume
 analysis, SQLite database management, and Streamlit dashboards.
+https://hrassist.streamlit.app/
