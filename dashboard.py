@@ -1,586 +1,380 @@
 
+"""
+CV Analyzer Dashboard
+Reads candidates directly from candidates.db (SQLite).
+
+Run from your project folder:
+    .\\.venv\\Scripts\\python.exe -m streamlit run dashboard.py
+"""
 from pathlib import Path
 import sqlite3
-
 import pandas as pd
 import streamlit as st
-import candidate_crud as crud
+
+# Import shared database helpers and field definitions from candidate_crud.py
+from candidate_crud import connect, init_db, FIELDS
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "candidates.db"
+
+st.set_page_config(page_title="CV Analyzer Dashboard", page_icon="📄", layout="wide")
+st.title("📄 CV Analyzer Dashboard")
+st.caption("Candidate screening overview • Connected directly to SQLite")
+
+# Initialize the existing database using the CRUD module.
+try:
+    init_db()
+except Exception as exc:
+    st.error(f"Could not initialize the candidates database: {exc}")
+    st.stop()
 
 
-# --------------------------------------------------
-# 1. PAGE CONFIGURATION AND DATABASE INITIALIZATION
-# --------------------------------------------------
+@st.cache_data(ttl=10)
+def load_data(path):
+    with sqlite3.connect(path) as conn:
+        return pd.read_sql_query("SELECT * FROM candidates ORDER BY id DESC", conn)
 
-st.set_page_config(
-    page_title="CV Analyzer - HR Dashboard",
-    page_icon="📄",
-    layout="wide",
+
+if not DB_PATH.exists():
+    st.error(f"Database not found: {DB_PATH}")
+    st.info("Save dashboard.py in the same folder as candidates.db.")
+    st.stop()
+
+try:
+    df = load_data(str(DB_PATH))
+except Exception as exc:
+    st.error(f"Could not load the candidates table: {exc}")
+    st.stop()
+
+# Keep the dashboard usable even when there are no candidates yet.
+if df.empty:
+    st.warning("No candidate records found. Run CV_analyzer.py or add a candidate below.")
+
+required = ["id", "CV File", "Candidate Name", "Email", "Phone",
+            "Match Score (%)", "Matched Skills", "Missing / Unclear Requirements",
+            "Evidence Summary", "Shortlist Status", "Human Review", "Analysis Notes"]
+missing = [name for name in required if name not in df.columns]
+if missing:
+    st.error(f"Database is missing expected columns: {missing}")
+    st.stop()
+
+df["Score"] = pd.to_numeric(df["Match Score (%)"], errors="coerce")
+df["Candidate Name"] = df["Candidate Name"].fillna("Unnamed candidate").astype(str)
+df["Shortlist Status"] = df["Shortlist Status"].fillna("Unknown").astype(str)
+
+st.sidebar.header("Filters")
+statuses = sorted(df["Shortlist Status"].unique().tolist())
+chosen_statuses = st.sidebar.multiselect("Shortlist status", statuses, default=statuses)
+minimum_score = st.sidebar.slider("Minimum match score", 0, 100, 0)
+search = st.sidebar.text_input("Search candidate or CV filename")
+
+filtered = df[df["Shortlist Status"].isin(chosen_statuses)].copy()
+filtered = filtered[filtered["Score"].fillna(-1) >= minimum_score]
+
+if search.strip():
+    q = search.strip().lower()
+    filtered = filtered[
+        filtered["Candidate Name"].str.lower().str.contains(q, na=False)
+        | filtered["CV File"].fillna("").str.lower().str.contains(q, na=False)
+    ]
+
+scores = df["Score"].dropna()
+average = scores.mean() if not scores.empty else 0
+shortlisted = int(df["Shortlist Status"].str.lower().eq("shortlisted").sum())
+review_flags = int(df["Human Review"].fillna("").astype(str).str.contains(
+    "yes|review|pending", case=False, regex=True).sum())
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total candidate records", len(df))
+c2.metric("Average match score", f"{average:.1f}%")
+c3.metric("Shortlisted", shortlisted)
+c4.metric("Human review flags", review_flags)
+
+st.divider()
+left, right = st.columns(2)
+
+with left:
+    st.subheader("Candidate match scores")
+    chart = filtered[["Candidate Name", "Score"]].dropna().sort_values("Score")
+    if chart.empty:
+        st.info("No scored candidates match these filters.")
+    else:
+        st.bar_chart(chart.set_index("Candidate Name")["Score"])
+
+with right:
+    st.subheader("Shortlist status distribution")
+    counts = filtered["Shortlist Status"].value_counts()
+    if counts.empty:
+        st.info("No candidates match these filters.")
+    else:
+        st.bar_chart(counts)
+
+st.divider()
+st.subheader(f"Candidate records ({len(filtered)} shown)")
+st.dataframe(
+    filtered[["id", "Candidate Name", "CV File", "Match Score (%)",
+              "Shortlist Status", "Human Review"]],
+    use_container_width=True,
+    hide_index=True,
 )
 
-ROOT = Path(__file__).resolve().parent
-DB_FILE = ROOT / "candidates.db"
-
-# Initialize the database using your existing CRUD module.
-crud.init_db()
-
-
-# --------------------------------------------------
-# 2. DATABASE HELPER FUNCTIONS
-# --------------------------------------------------
-
-def get_all_candidates():
-    """Return all candidates from the SQLite database."""
-    with crud.connect() as con:
-        return pd.read_sql_query(
-            'SELECT * FROM candidates ORDER BY id DESC',
-            con,
-        )
-
-
-def get_candidate_by_id(candidate_id):
-    """Return one candidate using its database ID."""
-    with crud.connect() as con:
-        row = con.execute(
-            "SELECT * FROM candidates WHERE id = ?",
-            (candidate_id,),
-        ).fetchone()
-
-    return dict(row) if row else None
-
-
-def validate_candidate(values):
-    """Validate required fields and the optional match score."""
-    if not values.get("CV File", "").strip():
-        return "CV File is required."
-
-    score = values.get("Match Score (%)", "").strip()
-
-    if score:
-        try:
-            numeric_score = float(score)
-        except ValueError:
-            return "Match Score (%) must be a number between 0 and 100."
-
-        if not 0 <= numeric_score <= 100:
-            return "Match Score (%) must be between 0 and 100."
-
-    return None
-
-
-def create_candidate_record(values):
-    """Insert a new candidate using the fields in candidate_crud.py."""
-    columns = ", ".join(f'"{field}"' for field in crud.FIELDS)
-    placeholders = ", ".join("?" for _ in crud.FIELDS)
-
-    sql = (
-        f"INSERT INTO candidates ({columns}) "
-        f"VALUES ({placeholders})"
-    )
-
-    with crud.connect() as con:
-        con.execute(
-            sql,
-            [values.get(field, "").strip() for field in crud.FIELDS],
-        )
-
-
-def update_candidate_record(candidate_id, values):
-    """Update a candidate and refresh the updated_at timestamp."""
-    assignments = ", ".join(
-        f'"{field}" = ?' for field in crud.EDITABLE_FIELDS
-    )
-
-    sql = (
-        f"UPDATE candidates SET {assignments}, "
-        "updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    )
-
-    parameters = [
-        values.get(field, "").strip()
-        for field in crud.EDITABLE_FIELDS
-    ]
-    parameters.append(candidate_id)
-
-    with crud.connect() as con:
-        con.execute(sql, parameters)
-
-
-def delete_candidate_record(candidate_id):
-    """Permanently delete a candidate by ID."""
-    with crud.connect() as con:
-        con.execute(
-            "DELETE FROM candidates WHERE id = ?",
-            (candidate_id,),
-        )
-
-
-# --------------------------------------------------
-# 3. REUSABLE FORM FIELD WIDGET
-# --------------------------------------------------
-
-MULTILINE_FIELDS = {
-    "Matched Skills",
-    "Missing / Unclear Requirements",
-    "Evidence Summary",
-    "Analysis Notes",
+st.subheader("Candidate details")
+options = {
+    f"{row['Candidate Name']} — {row['CV File']} (ID {row['id']})": int(row["id"])
+    for _, row in filtered.iterrows()
 }
 
+if options:
+    label = st.selectbox("Select a candidate", list(options.keys()))
+    record = df.loc[df["id"] == options[label]].iloc[0]
 
-def render_candidate_fields(fields, prefix, existing=None):
-    """
-    Display form fields and return their entered values.
-    Existing values are used when editing a candidate.
-    """
-    values = {}
+    a, b = st.columns(2)
+    with a:
+        st.markdown("**Contact information**")
+        st.write("Email:", record["Email"] or "Not provided")
+        st.write("Phone:", record["Phone"] or "Not provided")
+        st.markdown("**Matched skills**")
+        st.write(record["Matched Skills"] or "Not provided")
+        st.markdown("**Missing / unclear requirements**")
+        st.write(record["Missing / Unclear Requirements"] or "Not provided")
 
-    for field in fields:
-        default_value = ""
+    with b:
+        st.markdown("**Evidence summary**")
+        st.write(record["Evidence Summary"] or "Not provided")
+        st.markdown("**Analysis notes**")
+        st.write(record["Analysis Notes"] or "Not provided")
+        st.write("Human review:", record["Human Review"] or "Not specified")
+else:
+    st.info("No candidates match the selected filters.")
 
-        if existing:
-            saved_value = existing.get(field, "")
-            default_value = (
-                "" if saved_value is None else str(saved_value)
-            )
-
-        widget_key = f"{prefix}_{field}"
-
-        if field in MULTILINE_FIELDS:
-            values[field] = st.text_area(
-                field,
-                value=default_value,
-                key=widget_key,
-                height=100,
-            )
-        else:
-            values[field] = st.text_input(
-                field,
-                value=default_value,
-                key=widget_key,
-            )
-
-    return values
-
-
-# --------------------------------------------------
-# 4. DASHBOARD HEADER AND NAVIGATION
-# --------------------------------------------------
-
-st.title("📄 CV Analyzer — HR Dashboard")
 st.caption(
-    "Manage candidate records, review CV analysis, "
-    "and maintain interview details."
+    "AI-generated scores are screening aids only. A human reviewer must verify "
+    "the CV evidence and make all hiring decisions."
 )
 
-st.sidebar.title("HR Navigation")
+if st.button("Refresh dashboard"):
+    st.cache_data.clear()
+    st.rerun()
 
-page = st.sidebar.radio(
-    "Choose an operation",
-    [
-        "Dashboard & View",
-        "Create Candidate",
-        "Update Candidate",
-        "Delete Candidate",
-    ],
-)
-
-st.sidebar.divider()
-st.sidebar.caption(f"Database: {DB_FILE.name}")
+st.caption(f"SQLite database: {DB_PATH}")
 
 
-# --------------------------------------------------
-# 5. DASHBOARD: READ, SEARCH, FILTER AND VIEW
-# --------------------------------------------------
+# ============================================================
+# CRUD OPERATIONS — added below the original dashboard
+# ============================================================
 
-if page == "Dashboard & View":
-    st.header("Candidate Overview")
+st.divider()
+st.header("Candidate CRUD Operations")
+st.caption("Create, read, update, and delete candidate records in the same SQLite database.")
 
-    try:
-        df = get_all_candidates()
-    except (sqlite3.Error, pd.errors.DatabaseError) as exc:
-        st.error(f"Could not read the candidates database: {exc}")
-        st.stop()
-
-    total_candidates = len(df)
-
-    if "Shortlist Status" in df.columns:
-        statuses = (
-            df["Shortlist Status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
+# READ: View every candidate independently of the dashboard filters.
+with st.expander("View all candidate records", expanded=False):
+    with connect() as con:
+        all_candidates = pd.read_sql_query(
+            "SELECT * FROM candidates ORDER BY id DESC", con
         )
-        shortlisted_count = statuses.str.contains(
-            "shortlist", regex=False
-        ).sum()
-    else:
-        shortlisted_count = 0
-
-    if "Human Review" in df.columns:
-        review_values = (
-            df["Human Review"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
-        review_count = review_values.isin(
-            ["yes", "true", "required", "needed", "pending"]
-        ).sum()
-    else:
-        review_count = 0
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Total Candidates", total_candidates)
-    col2.metric("Shortlisted", int(shortlisted_count))
-    col3.metric("Flagged for Human Review", int(review_count))
-
-    st.divider()
-    st.subheader("Search and Filter Candidates")
-
-    search_text = st.text_input(
-        "Search by name, email, CV filename or phone",
-        placeholder="Enter a candidate name or keyword...",
-    )
-
-    if "Shortlist Status" in df.columns:
-        all_statuses = (
-            df["Shortlist Status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-        )
-        status_options = ["All"] + sorted(
-            status for status in all_statuses.unique() if status
-        )
-
-        selected_status = st.selectbox(
-            "Filter by shortlist status",
-            status_options,
-        )
-    else:
-        selected_status = "All"
-
-    filtered_df = df.copy()
-
-    if search_text.strip():
-        searchable_columns = [
-            column
-            for column in [
-                "Candidate Name",
-                "Email",
-                "CV File",
-                "Phone",
-            ]
-            if column in filtered_df.columns
-        ]
-
-        if searchable_columns:
-            mask = pd.Series(False, index=filtered_df.index)
-
-            for column in searchable_columns:
-                mask |= (
-                    filtered_df[column]
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(
-                        search_text.strip(),
-                        case=False,
-                        regex=False,
-                    )
-                )
-
-            filtered_df = filtered_df[mask]
-
-    if selected_status != "All":
-        filtered_df = filtered_df[
-            filtered_df["Shortlist Status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .eq(selected_status)
-        ]
-
-    preferred_columns = [
-        "id",
-        "Candidate Name",
-        "Email",
-        "Phone",
-        "Match Score (%)",
-        "Matched Skills",
-        "Shortlist Status",
-        "Human Review",
-        "Proposed Interview Date",
-        "Proposed Interview Time",
-    ]
-
-    visible_columns = [
-        column
-        for column in preferred_columns
-        if column in filtered_df.columns
-    ]
-
-    st.subheader(f"Candidate Records ({len(filtered_df)})")
-
-    if filtered_df.empty:
-        st.info("No candidates match your search or filter.")
-    else:
-        st.dataframe(
-            filtered_df[visible_columns],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        csv_data = filtered_df.to_csv(index=False).encode("utf-8")
-
-        st.download_button(
-            label="Download filtered candidates as CSV",
-            data=csv_data,
-            file_name="filtered_candidates.csv",
-            mime="text/csv",
-        )
-
-    st.divider()
-    st.subheader("View Full Candidate Details")
-
-    if not df.empty:
-        candidate_options = df.to_dict("records")
-
-        selected_candidate_id = st.selectbox(
-            "Select a candidate",
-            options=[row["id"] for row in candidate_options],
-            format_func=lambda candidate_id: next(
-                (
-                    f'ID {row["id"]} — '
-                    f'{row.get("Candidate Name") or "Unnamed"} '
-                    f'({row.get("CV File") or "No filename"})'
-                    for row in candidate_options
-                    if row["id"] == candidate_id
-                ),
-                f"ID {candidate_id}",
-            ),
-            key="view_candidate_id",
-        )
-
-        candidate = get_candidate_by_id(selected_candidate_id)
-
-        if candidate:
-            for field in crud.FIELDS:
-                value = candidate.get(field, "")
-                st.write(
-                    f"**{field}:** "
-                    f"{value if value not in (None, '') else 'Not provided'}"
-                )
-
-            st.caption(f"Database record ID: {candidate['id']}")
-
-            if candidate.get("created_at"):
-                st.caption(f"Created: {candidate['created_at']}")
-
-            if candidate.get("updated_at"):
-                st.caption(f"Last updated: {candidate['updated_at']}")
-    else:
-        st.info("No candidate records are available yet.")
+    st.dataframe(all_candidates, use_container_width=True, hide_index=True)
 
 
-# --------------------------------------------------
-# 6. CREATE CANDIDATE
-# --------------------------------------------------
-
-elif page == "Create Candidate":
-    st.header("Create a Candidate Record")
-
-    st.write(
-        "Enter the candidate details below. "
-        "The CV filename must be unique."
-    )
-
+# CREATE: Add a candidate using a Streamlit form.
+with st.expander("Add a new candidate", expanded=False):
     with st.form("create_candidate_form"):
-        values = render_candidate_fields(
-            crud.FIELDS,
-            prefix="create",
+        new_values = {}
+
+        new_values["CV File"] = st.text_input("CV File *")
+
+        left, right = st.columns(2)
+        with left:
+            new_values["Candidate Name"] = st.text_input("Candidate Name")
+            new_values["Email"] = st.text_input("Email")
+            new_values["Phone"] = st.text_input("Phone")
+            new_values["Match Score (%)"] = st.text_input("Match Score (%)")
+
+        with right:
+            new_values["Shortlist Status"] = st.selectbox(
+                "Shortlist Status",
+                ["Not shortlisted", "Shortlisted", "Pending review"]
+            )
+            new_values["Human Review"] = st.selectbox(
+                "Human Review", ["Yes", "No", "Pending"]
+            )
+            new_values["Proposed Interview Date"] = st.text_input(
+                "Proposed Interview Date"
+            )
+            new_values["Proposed Interview Time"] = st.text_input(
+                "Proposed Interview Time"
+            )
+
+        new_values["Matched Skills"] = st.text_area("Matched Skills")
+        new_values["Missing / Unclear Requirements"] = st.text_area(
+            "Missing / Unclear Requirements"
         )
+        new_values["Evidence Summary"] = st.text_area("Evidence Summary")
+        new_values["Analysis Notes"] = st.text_area("Analysis Notes")
+        new_values["Interview Location"] = st.text_input("Interview Location")
+        new_values["Calendar Status"] = st.text_input("Calendar Status")
+        new_values["Calendar Event Link"] = st.text_input("Calendar Event Link")
 
-        submitted = st.form_submit_button(
-            "Create Candidate",
-            type="primary",
-        )
+        create_submitted = st.form_submit_button("Create candidate")
 
-    if submitted:
-        error = validate_candidate(values)
-
-        if error:
-            st.error(error)
+    if create_submitted:
+        if not new_values["CV File"].strip():
+            st.error("CV File is required.")
         else:
+            # Store a numeric score as entered; leave unknown scores blank.
+            score_text = new_values["Match Score (%)"].strip()
+            if score_text:
+                try:
+                    score_number = float(score_text)
+                    if not 0 <= score_number <= 100:
+                        raise ValueError
+                    new_values["Match Score (%)"] = str(score_number)
+                except ValueError:
+                    st.error("Match Score (%) must be a number from 0 to 100.")
+                    st.stop()
+
             try:
-                create_candidate_record(values)
-                st.success("Candidate record created successfully.")
+                with connect() as con:
+                    columns = ", ".join(f'"{field}"' for field in FIELDS)
+                    placeholders = ", ".join("?" for _ in FIELDS)
+                    con.execute(
+                        f"INSERT INTO candidates ({columns}) VALUES ({placeholders})",
+                        [new_values.get(field, "") for field in FIELDS],
+                    )
+
+                st.success("Candidate created successfully.")
+                st.cache_data.clear()
                 st.rerun()
 
             except sqlite3.IntegrityError:
-                st.error(
-                    "A candidate with this CV File already exists. "
-                    "Please use a unique filename."
-                )
-
-            except sqlite3.Error as exc:
-                st.error(f"Database error: {exc}")
+                st.error("A candidate with this CV File already exists.")
+            except Exception as exc:
+                st.error(f"Could not create candidate: {exc}")
 
 
-# --------------------------------------------------
-# 7. UPDATE CANDIDATE
-# --------------------------------------------------
+# UPDATE: Select a candidate and edit its fields.
+with st.expander("Update a candidate", expanded=False):
+    with connect() as con:
+        candidates_for_update = con.execute(
+            'SELECT id, "Candidate Name", "CV File" '
+            'FROM candidates ORDER BY id DESC'
+        ).fetchall()
 
-elif page == "Update Candidate":
-    st.header("Update a Candidate Record")
-
-    df = get_all_candidates()
-
-    if df.empty:
+    if not candidates_for_update:
         st.info("There are no candidates to update.")
     else:
-        candidate_options = df.to_dict("records")
+        update_options = {
+            f"{row['Candidate Name'] or 'Unnamed candidate'} — "
+            f"{row['CV File']} (ID {row['id']})": row["id"]
+            for row in candidates_for_update
+        }
 
-        selected_candidate_id = st.selectbox(
-            "Select the candidate to update",
-            options=[row["id"] for row in candidate_options],
-            format_func=lambda candidate_id: next(
-                (
-                    f'ID {row["id"]} — '
-                    f'{row.get("Candidate Name") or "Unnamed"} '
-                    f'({row.get("CV File") or "No filename"})'
-                    for row in candidate_options
-                    if row["id"] == candidate_id
-                ),
-                f"ID {candidate_id}",
-            ),
-            key="update_candidate_id",
+        selected_update = st.selectbox(
+            "Choose candidate to update",
+            list(update_options.keys()),
+            key="update_candidate_selector",
         )
+        update_id = update_options[selected_update]
 
-        existing = get_candidate_by_id(selected_candidate_id)
+        with connect() as con:
+            existing = con.execute(
+                "SELECT * FROM candidates WHERE id = ?", (update_id,)
+            ).fetchone()
 
-        if existing:
-            st.caption(
-                "Edit the fields below. The existing values are "
-                "pre-filled; leave a field unchanged to keep its value."
-            )
-
-            with st.form("update_candidate_form"):
-                values = render_candidate_fields(
-                    crud.EDITABLE_FIELDS,
-                    prefix=f"update_{selected_candidate_id}",
-                    existing=existing,
+        with st.form("update_candidate_form"):
+            updated_values = {}
+            for field in FIELDS:
+                current_value = existing[field] or ""
+                updated_values[field] = st.text_input(
+                    field,
+                    value=str(current_value),
+                    key=f"update_{update_id}_{field}",
                 )
 
-                submitted = st.form_submit_button(
-                    "Save Changes",
-                    type="primary",
-                )
+            update_submitted = st.form_submit_button("Save changes")
 
-            if submitted:
-                error = validate_candidate(values)
+        if update_submitted:
+            if not updated_values["CV File"].strip():
+                st.error("CV File cannot be blank.")
+            else:
+                score_text = updated_values["Match Score (%)"].strip()
+                score_valid = True
 
-                if error:
-                    st.error(error)
-                else:
+                if score_text:
                     try:
-                        update_candidate_record(
-                            selected_candidate_id,
-                            values,
+                        score_number = float(score_text)
+                        if not 0 <= score_number <= 100:
+                            raise ValueError
+                        updated_values["Match Score (%)"] = str(score_number)
+                    except ValueError:
+                        score_valid = False
+                        st.error("Match Score (%) must be a number from 0 to 100.")
+
+                if score_valid:
+                    try:
+                        assignments = ", ".join(
+                            f'"{field}" = ?' for field in FIELDS
                         )
-                        st.success(
-                            "Candidate record updated successfully."
-                        )
+                        with connect() as con:
+                            con.execute(
+                                f"UPDATE candidates SET {assignments}, "
+                                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                [updated_values[field] for field in FIELDS]
+                                + [update_id],
+                            )
+
+                        st.success("Candidate updated successfully.")
+                        st.cache_data.clear()
                         st.rerun()
 
                     except sqlite3.IntegrityError:
-                        st.error(
-                            "Another record already uses this CV File. "
-                            "Please enter a unique filename."
-                        )
-
-                    except sqlite3.Error as exc:
-                        st.error(f"Database error: {exc}")
+                        st.error("That CV File is already assigned to another candidate.")
+                    except Exception as exc:
+                        st.error(f"Could not update candidate: {exc}")
 
 
-# --------------------------------------------------
-# 8. DELETE CANDIDATE
-# --------------------------------------------------
+# DELETE: Require explicit confirmation before permanently deleting a record.
+with st.expander("Delete a candidate", expanded=False):
+    with connect() as con:
+        candidates_for_delete = con.execute(
+            'SELECT id, "Candidate Name", "CV File" '
+            'FROM candidates ORDER BY id DESC'
+        ).fetchall()
 
-elif page == "Delete Candidate":
-    st.header("Delete a Candidate Record")
-
-    st.warning(
-        "Deleting a record is permanent. Confirm the correct candidate "
-        "before proceeding."
-    )
-
-    df = get_all_candidates()
-
-    if df.empty:
+    if not candidates_for_delete:
         st.info("There are no candidates to delete.")
     else:
-        candidate_options = df.to_dict("records")
+        delete_options = {
+            f"{row['Candidate Name'] or 'Unnamed candidate'} — "
+            f"{row['CV File']} (ID {row['id']})": row["id"]
+            for row in candidates_for_delete
+        }
 
-        selected_candidate_id = st.selectbox(
-            "Select the candidate to delete",
-            options=[row["id"] for row in candidate_options],
-            format_func=lambda candidate_id: next(
-                (
-                    f'ID {row["id"]} — '
-                    f'{row.get("Candidate Name") or "Unnamed"} '
-                    f'({row.get("CV File") or "No filename"})'
-                    for row in candidate_options
-                    if row["id"] == candidate_id
-                ),
-                f"ID {candidate_id}",
-            ),
-            key="delete_candidate_id",
+        selected_delete = st.selectbox(
+            "Choose candidate to delete",
+            list(delete_options.keys()),
+            key="delete_candidate_selector",
+        )
+        delete_id = delete_options[selected_delete]
+
+        confirm_delete = st.checkbox(
+            "I confirm that I want to permanently delete this candidate record.",
+            key="confirm_candidate_delete",
         )
 
-        candidate = get_candidate_by_id(selected_candidate_id)
-
-        if candidate:
-            st.subheader("Selected Candidate")
-
-            st.write(
-                f'**Candidate Name:** '
-                f'{candidate.get("Candidate Name") or "Not provided"}'
-            )
-            st.write(
-                f'**Email:** {candidate.get("Email") or "Not provided"}'
-            )
-            st.write(
-                f'**CV File:** {candidate.get("CV File") or "Not provided"}'
-            )
-            st.write(
-                f'**Match Score:** '
-                f'{candidate.get("Match Score (%)") or "Not provided"}'
-            )
-
-            confirm_delete = st.checkbox(
-                "I confirm that I want to permanently delete this record.",
-                key=f"confirm_delete_{selected_candidate_id}",
-            )
-
-            if st.button(
-                "Delete Candidate Permanently",
-                type="primary",
-                disabled=not confirm_delete,
-            ):
+        if st.button("Delete candidate", type="secondary"):
+            if not confirm_delete:
+                st.warning("Please confirm before deleting.")
+            else:
                 try:
-                    delete_candidate_record(selected_candidate_id)
-                    st.success("Candidate record deleted successfully.")
+                    with connect() as con:
+                        con.execute(
+                            "DELETE FROM candidates WHERE id = ?", (delete_id,)
+                        )
+
+                    st.success("Candidate deleted successfully.")
+                    st.cache_data.clear()
                     st.rerun()
 
-                except sqlite3.Error as exc:
-                    st.error(f"Could not delete the candidate: {exc}")
-
-
-# --------------------------------------------------
-# 9. FOOTER
-# --------------------------------------------------
-
-st.sidebar.divider()
-st.sidebar.caption("CV Analyzer Agent | HR Management")
+                except Exception as exc:
+                    st.error(f"Could not delete candidate: {exc}")
